@@ -19,7 +19,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Slider } from "@/components/ui/slider";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
-import { PLATFORM_ICONS } from "@/lib/platform-icons";
+import { IconPicker } from "@/components/IconPicker";
 import { generatePassword, calcStrength } from "@/lib/crypto";
 import type { Account, PasswordOptions } from "@/lib/types";
 
@@ -111,24 +111,7 @@ export function FormModal({
         {/* Icon picker */}
         <div className="space-y-2">
           <Label>Plataforma</Label>
-          <div className="flex flex-wrap gap-1.5 max-h-24 overflow-y-auto">
-            {PLATFORM_ICONS.map(({ id, label, Icon }) => (
-              <Tooltip key={id}>
-                <TooltipTrigger asChild>
-                  <Button
-                    type="button"
-                    variant={formIcon === id ? "default" : "outline"}
-                    size="icon"
-                    className="h-8 w-8"
-                    onClick={() => onIconChange(id)}
-                  >
-                    <Icon size={16} weight={formIcon === id ? "fill" : "regular"} />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">{label}</TooltipContent>
-              </Tooltip>
-            ))}
-          </div>
+          <IconPicker value={formIcon} onChange={onIconChange} />
         </div>
 
         {/* Name */}
