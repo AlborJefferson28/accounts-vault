@@ -2,7 +2,7 @@
 const enc = new TextEncoder();
 const dec = new TextDecoder();
 
-async function deriveKey(pw: string): Promise<CryptoKey> {
+async function deriveKey(pw: string, userId: string): Promise<CryptoKey> {
   const km = await crypto.subtle.importKey(
     "raw",
     enc.encode(pw),
@@ -10,10 +10,13 @@ async function deriveKey(pw: string): Promise<CryptoKey> {
     false,
     ["deriveKey"]
   );
+  // Use user.id + fixed string as salt for total uniqueness
+  const salt = enc.encode(`vault-${userId}-2024`);
+  
   return crypto.subtle.deriveKey(
     {
       name: "PBKDF2",
-      salt: enc.encode("vault-salt-2024"),
+      salt,
       iterations: 50000,
       hash: "SHA-256",
     },
@@ -24,8 +27,12 @@ async function deriveKey(pw: string): Promise<CryptoKey> {
   );
 }
 
-export async function doEncrypt(text: string, pw: string): Promise<string> {
-  const key = await deriveKey(pw);
+export async function doEncrypt(
+  text: string, 
+  pw: string, 
+  userId: string
+): Promise<string> {
+  const key = await deriveKey(pw, userId);
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const ct = await crypto.subtle.encrypt(
     { name: "AES-GCM", iv },
@@ -40,10 +47,11 @@ export async function doEncrypt(text: string, pw: string): Promise<string> {
 
 export async function doDecrypt(
   b64: string,
-  pw: string
+  pw: string,
+  userId: string
 ): Promise<string | null> {
   try {
-    const key = await deriveKey(pw);
+    const key = await deriveKey(pw, userId);
     const buf = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
     const res = await crypto.subtle.decrypt(
       { name: "AES-GCM", iv: buf.slice(0, 12) },

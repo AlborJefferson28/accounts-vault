@@ -1,8 +1,10 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { toast } from "sonner";
-import { doEncrypt, doDecrypt, generatePassword } from "@/lib/crypto";
+import { generatePassword } from "@/lib/crypto";
 import { useTheme } from "@/hooks/use-theme";
-import { LoginScreen } from "@/components/LoginScreen";
+import { useAuth } from "@/hooks/use-auth";
+import { useVault } from "@/hooks/use-vault";
+import { AuthScreen } from "@/components/AuthScreen";
 import { VaultScreen } from "@/components/VaultScreen";
 import { FormModal } from "@/components/FormModal";
 import { DetailModal } from "@/components/DetailModal";
@@ -22,13 +24,20 @@ const DEFAULT_PW_OPTS: PasswordOptions = {
 export default function App() {
   const { theme, toggleTheme } = useTheme();
 
-  // ── Auth state ──
-  const [screen, setScreen] = useState<"login" | "vault">("login");
-  const [masterPw, setMasterPw] = useState<string | null>(null);
-  const [masterHash, setMasterHash] = useState<string | null>(null);
+  // ── Auth ──
+  const { user, screen, loading, authError, masterPw, signIn, signUp, signOut, setScreen } = useAuth();
 
-  // ── Data ──
-  const [accounts, setAccounts] = useState<Account[]>([]);
+  // ── Vault data ──
+  const { accounts, loadEntries, createEntry, updateEntry, deleteEntry, decryptPassword } = useVault();
+
+  // Load vault entries when user authenticates
+  useEffect(() => {
+    if (user && screen === "vault") {
+      loadEntries();
+    }
+  }, [user, screen, loadEntries]);
+
+  // ── Search ──
   const [search, setSearch] = useState("");
 
   // ── Modal state ──
@@ -48,9 +57,6 @@ export default function App() {
   const [detailDecrypted, setDetailDecrypted] = useState("");
   const [showDetailPw, setShowDetailPw] = useState(false);
 
-  // ── Login state ──
-  const [loginError, setLoginError] = useState("");
-
   // ── Regen password ──
   const regenPassword = useCallback(
     (opts?: PasswordOptions) => {
@@ -59,47 +65,6 @@ export default function App() {
     },
     [formPwOpts]
   );
-
-  // ── Login ──
-  const handleLogin = useCallback(
-    async (pwValue: string) => {
-      setLoginError("");
-      if (!pwValue || pwValue.length < 4) {
-        setLoginError("Mínimo 4 caracteres");
-        return;
-      }
-      if (!masterHash) {
-        const confirmEl = document.getElementById(
-          "inp-confirm"
-        ) as HTMLInputElement | null;
-        if (!confirmEl || confirmEl.value !== pwValue) {
-          setLoginError("Las contraseñas no coinciden");
-          return;
-        }
-        const hash = await doEncrypt("VAULT_OK", pwValue);
-        setMasterHash(hash);
-        setMasterPw(pwValue);
-        setScreen("vault");
-      } else {
-        const check = await doDecrypt(masterHash, pwValue);
-        if (check === "VAULT_OK") {
-          setMasterPw(pwValue);
-          setScreen("vault");
-        } else {
-          setLoginError("Contraseña incorrecta");
-        }
-      }
-    },
-    [masterHash]
-  );
-
-  // ── Lock ──
-  const lockVault = useCallback(() => {
-    setMasterPw(null);
-    setScreen("login");
-    setModal(null);
-    setLoginError("");
-  }, []);
 
   // ── Open form ──
   const openForm = useCallback(
@@ -135,32 +100,37 @@ export default function App() {
         toast.error("La contraseña no puede estar vacía");
         return;
       }
+      if (!masterPw || !user) return;
 
       setSaving(true);
-      const encPw = await doEncrypt(pw, masterPw!);
 
+      let success = false;
       if (editId) {
-        setAccounts((prev) =>
-          prev.map((a) =>
-            a.id === editId
-              ? { ...a, name, url, username, iconId: formIcon, encPw }
-              : a
-          )
-        );
-        toast.success("Cuenta actualizada ✓");
+        success = await updateEntry(user.id, masterPw, {
+          id: editId,
+          name,
+          url,
+          username,
+          iconId: formIcon,
+          plainPw: pw,
+        });
       } else {
-        setAccounts((prev) => [
-          ...prev,
-          { id: "a" + Date.now(), name, url, username, iconId: formIcon, encPw },
-        ]);
-        toast.success("Cuenta creada ✓");
+        success = await createEntry(user.id, masterPw, {
+          name,
+          url,
+          username,
+          iconId: formIcon,
+          plainPw: pw,
+        });
       }
 
       setSaving(false);
-      setModal(null);
-      setEditId(null);
+      if (success) {
+        setModal(null);
+        setEditId(null);
+      }
     },
-    [editId, formIcon, formPw, masterPw]
+    [editId, formIcon, formPw, masterPw, user, createEntry, updateEntry]
   );
 
   // ── Open detail ──
@@ -170,13 +140,13 @@ export default function App() {
       setShowDetailPw(false);
       setDetailDecrypted("");
       const acc = accounts.find((a) => a.id === id);
-      if (acc?.encPw) {
-        const d = await doDecrypt(acc.encPw, masterPw!);
-        setDetailDecrypted(d ?? "");
+      if (acc?.encPw && masterPw && user) {
+        const d = await decryptPassword(acc.encPw, masterPw, user.id);
+        setDetailDecrypted(d);
       }
       setModal("detail");
     },
-    [accounts, masterPw]
+    [accounts, masterPw, decryptPassword]
   );
 
   const closeDetail = useCallback(() => {
@@ -191,13 +161,15 @@ export default function App() {
     setModal("delete");
   }, []);
 
-  const confirmDelete = useCallback(() => {
-    setAccounts((prev) => prev.filter((a) => a.id !== deleteId));
-    setModal(null);
-    setDeleteId(null);
-    setDetailId(null);
-    toast.success("Cuenta eliminada");
-  }, [deleteId]);
+  const confirmDelete = useCallback(async () => {
+    if (!deleteId) return;
+    const ok = await deleteEntry(deleteId);
+    if (ok) {
+      setModal(null);
+      setDeleteId(null);
+      setDetailId(null);
+    }
+  }, [deleteId, deleteEntry]);
 
   // ── Copy helpers ──
   const copyToClipboard = useCallback(
@@ -216,17 +188,31 @@ export default function App() {
     []
   );
 
+  // ── Loading splash ──
+  if (loading) {
+    return (
+      <div className="flex min-h-screen items-center justify-center">
+        <div className="flex flex-col items-center gap-3 text-muted-foreground">
+          <div className="h-8 w-8 rounded-full border-2 border-primary border-t-transparent animate-spin" />
+          <span className="text-sm">Cargando bóveda...</span>
+        </div>
+      </div>
+    );
+  }
+
   // ═══════════════════════════════════════
   // ── RENDER ──
   // ═══════════════════════════════════════
 
   return (
     <div className="mx-auto max-w-2xl px-5 py-8">
-      {screen === "login" ? (
-        <LoginScreen
-          isNew={!masterHash}
-          loginError={loginError}
-          onLogin={handleLogin}
+      {screen !== "vault" ? (
+        <AuthScreen
+          mode={screen}
+          authError={authError}
+          onLogin={signIn}
+          onRegister={signUp}
+          onToggleMode={() => setScreen(screen === "login" ? "register" : "login")}
         />
       ) : (
         <VaultScreen
@@ -234,7 +220,7 @@ export default function App() {
           search={search}
           onSearchChange={setSearch}
           onNew={() => openForm(null)}
-          onLock={lockVault}
+          onLock={signOut}
           onCardClick={openDetail}
           onEdit={openForm}
           onDelete={askDelete}
@@ -265,7 +251,7 @@ export default function App() {
 
       <DetailModal
         open={modal === "detail"}
-        account={accounts.find((a) => a.id === detailId)}
+        account={accounts.find((a) => a.id === detailId) as Account | undefined}
         decryptedPw={detailDecrypted}
         showPw={showDetailPw}
         onTogglePw={() => setShowDetailPw((p) => !p)}
